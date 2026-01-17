@@ -1,5 +1,5 @@
 # noGCMap
-https://github.com/yudeguang/noGcMap 与 https://github.com/yudeguang/noGcStaticMap 为同一系列的无GC类型MAP，两者针对的场景有一定差异,noGcStaticMap性能稍高，内存占用更小，但不支持增删改。
+https://github.com/yudeguang17/noGcMap 与 https://github.com/yudeguang17/noGcStaticMap 为同一系列的无GC类型MAP，两者针对的场景有一定差异,noGcStaticMap性能稍高，内存占用更小，但不支持增删改。
 
 与fastcache bigcache等相比，无hash冲突问题，并且对键值对增长无限制，不会删除老旧键值对。
 
@@ -11,23 +11,21 @@ https://github.com/yudeguang/noGcMap 与 https://github.com/yudeguang/noGcStatic
 
 1)几乎零GC;
 
-2)无hash碰撞问题(对比fastcache);
+2)无hash碰撞问题;
 
-3)支持增删改( 相比 https://github.com/yudeguang/noGcStaticMap );
+3)支持增删改( 相比 https://github.com/yudeguang17/noGcStaticMap );
 
 4)代码量非常少，适合根据自己需求做二次修改;
 
-5)不限制键值对占用内存量(对比fastcache);
-
 缺点:
-1)性能比 https://github.com/yudeguang/noGcStaticMap 稍差，内存占用稍高;
+1)性能比 https://github.com/yudeguang17/noGcStaticMap 稍差，内存占用稍高;
 
 
 ```go
 package main
 
 import (
-	"github.com/yudeguang/noGcMap"
+	"github.com/yudeguang17/noGcMap"
 	"log"
 )
 

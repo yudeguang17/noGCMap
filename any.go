@@ -1,8 +1,3 @@
-// Copyright 2020 rateLimit Author(https://github.com/yudeguang/noGCMap). All Rights Reserved.
-//
-// This Source Code Form is subject to the terms of the MIT License.
-// If a copy of the MIT was not distributed with this file,
-// You can obtain one at https://github.com/yudeguang/noGCMap.
 package noGCMap
 
 import (
@@ -12,7 +7,7 @@ import (
 )
 
 var chunkSize = 64 * 1024
-var needDeketeKVPairPersent = 20
+var needDeketeKVPairPersent = 50
 
 const bucketsNum = 512
 
@@ -32,7 +27,7 @@ type bucket struct {
 type Config struct {
 	//用于定义当删除的键值对占总键值对的百分比达到多少时，开始一轮真正的删除老旧键值对，并回收内存空间操作
 	//该值介于1到100之间
-	//默认为20
+	//默认为50
 	NeedDeketeKVPairPersent int
 	//用于定义chunkSize
 	//最终的chunkSize为 MultiplesOf64KForchunkSize * 64 * 1024
@@ -69,15 +64,15 @@ func (n *NoGcMapAny) Get(k []byte) (v []byte, exist bool) {
 	if exist {
 		v, exist = n.buckets[idx].read(k, dataBeginPos)
 		if exist {
-			return v, exist
+			return
 		}
 	}
 	//分片数据中没找到，下面再从可能存在hash冲突的小表查找
 	n.lock.RLock()
 	defer n.lock.RUnlock()
-	v, exist = n.mapForHashCollisionAndLongKVPair[string(k)]
+	val, exist := n.mapForHashCollisionAndLongKVPair[string(k)]
 	if exist {
-		return v, exist
+		return val, exist
 	}
 	return v, false
 }
@@ -97,7 +92,7 @@ func (n *NoGcMapAny) Set(k, v []byte) {
 	idx := h % bucketsNum
 	kvPairLen := len(k) + len(v) + 5
 	//不支持KV长度过大的数据，如果过长，会被存储到mapForHashCollisionAndLongKVPair
-	if kvPairLen > chunkSize || len(k) > 65535 || len(v) > 65535 {
+	if kvPairLen > chunkSize {
 		n.lock.Lock()
 		n.mapForHashCollisionAndLongKVPair[string(k)] = v
 		n.lock.Unlock()
@@ -114,7 +109,7 @@ func (n *NoGcMapAny) Set(k, v []byte) {
 				return
 			} else {
 				//更新数据，val发生变化，那么先删除，然后在末尾添加一条新数据，并更新索引
-				n.buckets[idx].markAsDelete(h, k, dataBeginPos, false)
+				n.buckets[idx].tryDelete(h, k, dataBeginPos, false)
 				n.buckets[idx].write(h, k, v)
 				return
 			}
@@ -148,7 +143,7 @@ func (n *NoGcMapAny) Delete(k []byte) {
 	defer n.buckets[idx].lock.Unlock()
 	dataBeginPos, exist := n.buckets[idx].index[h]
 	if exist {
-		exist = n.buckets[idx].markAsDelete(h, k, dataBeginPos, true)
+		exist = n.buckets[idx].tryDelete(h, k, dataBeginPos, true)
 		if exist {
 			findInbuckets = true
 		}
@@ -161,6 +156,8 @@ func (n *NoGcMapAny) Delete(k []byte) {
 	}
 	//开始清除已删除的键值对,暂时做成需要一次性全部完成，后期在考虑是否做成一次只删除多少条的情况
 	if n.buckets[idx].deleteItemNum > 100 && float32(n.buckets[idx].deleteItemNum)/float32(len(n.buckets[idx].index))*100 > float32(needDeketeKVPairPersent) {
+		itemNum := 0
+		itemNumOfDeleted := 0
 		//重置数据
 		n.buckets[idx].dataBeginPos = 0
 		n.buckets[idx].curChunkIndex = 0
@@ -184,9 +181,12 @@ func (n *NoGcMapAny) Delete(k []byte) {
 					break
 				}
 				KVPairBuffer = KVPairBuffer[0:0]
-				KVPairBuffer, hh, hasDeleted = n.buckets[idx].readKVPairForGC(chunkBuffer, KVPairBuffer, dataBeginPos)
+				KVPairBuffer, hh, hasDeleted = n.readKVPairForGC(chunkBuffer, KVPairBuffer, dataBeginPos)
 				if !hasDeleted {
+					itemNum++
 					n.buckets[idx].writeKVPairForGC(hh, KVPairBuffer)
+				} else {
+					itemNumOfDeleted++
 				}
 				dataBeginPos = dataBeginPos + uint(len(KVPairBuffer))
 			}
@@ -201,7 +201,7 @@ func (n *NoGcMapAny) Delete(k []byte) {
 }
 
 //如果存在某个键:1)相应键值对第一个字节改为1;2)并从索引中删除(只针对从Delete方法);3)增加删除计数器;
-func (b *bucket) markAsDelete(h uint64, k []byte, dataBeginPos uint, isFromDelete bool) (exist bool) {
+func (b *bucket) tryDelete(h uint64, k []byte, dataBeginPos uint, isFromDelete bool) (exist bool) {
 	chunkIndex := int(dataBeginPos) / chunkSize
 	dataBeginPos = dataBeginPos % uint(chunkSize)
 	//读取键值的长度
@@ -244,7 +244,7 @@ func (b *bucket) read(k []byte, dataBeginPos uint) (v []byte, exist bool) {
 }
 
 //读取数据 用于回收内存空间时
-func (n *bucket) readKVPairForGC(chunkBuffer, KVPairBuffer []byte, dataBeginPos uint) ([]byte, uint64, bool) {
+func (n *NoGcMapAny) readKVPairForGC(chunkBuffer, KVPairBuffer []byte, dataBeginPos uint) ([]byte, uint64, bool) {
 	hasDeleted := false
 	//读取键值的长度 写得能懂直接从fastcache复制过来
 	if chunkBuffer[dataBeginPos] == 1 {
@@ -264,7 +264,7 @@ func (n *bucket) readKVPairForGC(chunkBuffer, KVPairBuffer []byte, dataBeginPos 
 
 //写入数据
 func (b *bucket) write(h uint64, k, v []byte) {
-	kvPairLen := len(k) + len(v) + 5 //1(该键值对是否已被删除);2(k的长度);2(v的长度);1+2+2=5
+	kvPairLen := 5 + len(k) + len(v) //1(该键值对是否已被删除);2(k的长度);2(v的长度);1+2+2=5
 	var kvLenBuf [4]byte
 	kvLenBuf[0] = byte(uint16(len(k)) >> 8)
 	kvLenBuf[1] = byte(len(k))

@@ -1,8 +1,3 @@
-// Copyright 2020 rateLimit Author(https://github.com/yudeguang/noGCMap). All Rights Reserved.
-//
-// This Source Code Form is subject to the terms of the MIT License.
-// If a copy of the MIT was not distributed with this file,
-// You can obtain one at https://github.com/yudeguang/noGCMap.
 package noGCMap
 
 import (
@@ -15,8 +10,10 @@ import (
 	"time"
 )
 
-func TestAny(t *testing.T) {
+func init() {
 	log.SetFlags(log.Lshortfile | log.Ltime)
+}
+func TestAny(t *testing.T) {
 	//构建值
 	var str string
 	var bigStr string
@@ -163,15 +160,6 @@ func TestAny(t *testing.T) {
 		}(i, &wgSetGetDelete)
 	}
 	wgSetGetDelete.Wait()
-	mapAny = nil
-	log.Println("清除所有数据")
-	gcRunAndPrint()
-	log.Println("开始测试2000W键值对 GC耗时")
-	mapAny2 := New()
-	for i := 0; i < 20000000; i++ {
-		mapAny2.SetString(strconv.Itoa(i), "@"+strconv.Itoa(i)+str)
-	}
-	gcRunAndPrint()
 }
 
 //一般是第二次执行才是真实耗时

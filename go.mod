@@ -1,5 +1,5 @@
-module github.com/yudeguang/noGCMap
+module github.com/yudeguang17/noGCMap
 
-go 1.17
+go 1.24.7
 
 require github.com/cespare/xxhash v1.1.0
