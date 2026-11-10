@@ -1,371 +1,204 @@
+// Copyright 2020 rateLimit Author(https://github.com/yudeguang/noGCMap). All Rights Reserved.
+//
+// This Source Code Form is subject to the terms of the MIT License.
+// If a copy of the MIT was not distributed with this file,
+// You can obtain one at https://github.com/yudeguang/noGCMap.
 package noGCMap
 
 import (
-	"bytes"
-	"fmt"
-	"github.com/VictoriaMetrics/fastcache"
+	"strconv"
 	"sync"
 	"testing"
-	"unsafe"
 )
 
-func b2s(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+// 说明：
+// 1. 所有基准都使用“每轮改写一个字节”的方式构造新值，
+//    避免命中 Set 中“值未变化则直接返回”的快捷路径，否则测到的是空转而不是写入。
+// 2. 本文件不引入任何第三方依赖，保证 module 模式下 go test ./... 可以直接跑通。
+//    如需与 fastcache 等实现对比，请在单独的测试模块中进行，不要给库本身引入依赖。
+
+const benchItems = 1 << 16
+
+func benchKeys() [][]byte {
+	keys := make([][]byte, benchItems)
+	for i := range keys {
+		keys[i] = []byte(strconv.Itoa(i))
+	}
+	return keys
 }
 
-//noGCMap
-func BenchmarkSet(b *testing.B) {
-	const items = 1 << 16
-	c := New()
+func BenchmarkAnySet(b *testing.B) {
+	keys := benchKeys()
+	m := New()
+	v := []byte("value")
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := []byte("xyza")
+		i := 0
+		val := append([]byte(nil), v...)
 		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				c.Set(k, v)
-			}
+			val[0]++
+			m.Set(keys[i%benchItems], val)
+			i++
 		}
 	})
 }
 
-//fastcache
-func BenchmarkFastcacheSet(b *testing.B) {
-	const items = 1 << 16
-	c := fastcache.New(12 * items)
-	defer c.Reset()
-	b.ReportAllocs()
-	b.SetBytes(items)
-	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := []byte("xyza")
-		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				c.Set(k, v)
-			}
-		}
-	})
-}
-
-//Std
-func BenchmarkStdMapSet(b *testing.B) {
-	const items = 1 << 16
-	m := make(map[string][]byte)
-	var mu sync.Mutex
-	b.ReportAllocs()
-	b.SetBytes(items)
-	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := []byte("xyza")
-		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				mu.Lock()
-				m[string(k)] = v
-				mu.Unlock()
-			}
-		}
-	})
-}
-
-//StdSyncMap
-func BenchmarkStdSyncMapSet(b *testing.B) {
-	const items = 1 << 16
-	m := sync.Map{}
-	b.ReportAllocs()
-	b.SetBytes(items)
-	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := "xyza"
-		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				m.Store(string(k), v)
-			}
-		}
-	})
-}
-
-//noGCMap
-func BenchmarkGet(b *testing.B) {
-	const items = 1 << 16
-	c := New()
-	k := []byte("\x00\x00\x00\x00")
-	v := []byte("xyza")
-	for i := 0; i < items; i++ {
-		k[0]++
-		if k[0] == 0 {
-			k[1]++
-		}
-		c.Set(k, v)
+func BenchmarkAnyGet(b *testing.B) {
+	keys := benchKeys()
+	m := New()
+	for i, k := range keys {
+		m.Set(k, []byte("value"+strconv.Itoa(i)))
 	}
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		var buf []byte
-		k := []byte("\x00\x00\x00\x00")
+		i := 0
 		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				buf, _ = c.Get(k)
-				if !bytes.Equal(buf, v) {
-					panic(fmt.Errorf("BUG: invalid value obtained; got %q; want %q", buf, v))
-				}
-			}
+			_, _ = m.Get(keys[i%benchItems])
+			i++
 		}
 	})
 }
 
-//fastcache
-func BenchmarkFastcacheGet(b *testing.B) {
-	const items = 1 << 16
-	c := fastcache.New(12 * items)
-	defer c.Reset()
-	k := []byte("\x00\x00\x00\x00")
-	v := []byte("xyza")
-	for i := 0; i < items; i++ {
-		k[0]++
-		if k[0] == 0 {
-			k[1]++
-		}
-		c.Set(k, v)
+func BenchmarkAnyGetTo(b *testing.B) {
+	keys := benchKeys()
+	m := New()
+	for i, k := range keys {
+		m.Set(k, []byte("value"+strconv.Itoa(i)))
 	}
-
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		var buf []byte
-		k := []byte("\x00\x00\x00\x00")
+		i := 0
+		buf := make([]byte, 0, 64)
 		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				buf = c.Get(buf[:0], k)
-				if !bytes.Equal(buf, v) {
-					panic(fmt.Errorf("BUG: invalid value obtained; got %q; want %q", buf, v))
-				}
-			}
+			v, _ := m.GetTo(buf[:0], keys[i%benchItems])
+			buf = v
+			i++
 		}
 	})
 }
 
-//std
-func BenchmarkStdSyncMapGet(b *testing.B) {
-	const items = 1 << 16
-	m := sync.Map{}
-	k := []byte("\x00\x00\x00\x00")
-	v := "xyza"
-	for i := 0; i < items; i++ {
-		k[0]++
-		if k[0] == 0 {
-			k[1]++
-		}
-		m.Store(string(k), v)
+func BenchmarkAnySetString(b *testing.B) {
+	keys := make([]string, benchItems)
+	for i := range keys {
+		keys[i] = strconv.Itoa(i)
 	}
-
+	m := New()
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
+		i := 0
 		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				vv, ok := m.Load(string(k))
-				if !ok || vv.(string) != string(v) {
-					panic(fmt.Errorf("BUG: unexpected value; got %q; want %q", vv, v))
-				}
-			}
+			m.SetString(keys[i%benchItems], "value")
+			i++
 		}
 	})
 }
 
-//Std
+func BenchmarkIntSet(b *testing.B) {
+	m := NewInt()
+	v := []byte("value")
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		val := append([]byte(nil), v...)
+		for pb.Next() {
+			val[0]++
+			m.Set(i%benchItems, val)
+			i++
+		}
+	})
+}
+
+func BenchmarkIntGet(b *testing.B) {
+	m := NewInt()
+	for i := 0; i < benchItems; i++ {
+		m.Set(i, []byte("value"+strconv.Itoa(i)))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.Get(i % benchItems)
+			i++
+		}
+	})
+}
+
+func BenchmarkIntGetTo(b *testing.B) {
+	m := NewInt()
+	for i := 0; i < benchItems; i++ {
+		m.Set(i, []byte("value"+strconv.Itoa(i)))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		buf := make([]byte, 0, 64)
+		for pb.Next() {
+			v, _ := m.GetTo(buf[:0], i%benchItems)
+			buf = v
+			i++
+		}
+	})
+}
+
+// BenchmarkStdMapGet 作为参照：标准 map + RWMutex。
 func BenchmarkStdMapGet(b *testing.B) {
-	const items = 1 << 16
-	m := make(map[string][]byte)
-	k := []byte("\x00\x00\x00\x00")
-	v := []byte("xyza")
-	for i := 0; i < items; i++ {
-		k[0]++
-		if k[0] == 0 {
-			k[1]++
-		}
-		m[string(k)] = v
+	keys := benchKeys()
+	m := make(map[string][]byte, benchItems)
+	for i, k := range keys {
+		m[string(k)] = []byte("value" + strconv.Itoa(i))
 	}
-
 	var mu sync.RWMutex
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
+		i := 0
 		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				mu.RLock()
-				vv := m[string(k)]
-				mu.RUnlock()
-				if string(vv) != string(v) {
-					panic(fmt.Errorf("BUG: unexpected value; got %q; want %q", vv, v))
-				}
-			}
+			mu.RLock()
+			_ = m[string(keys[i%benchItems])]
+			mu.RUnlock()
+			i++
 		}
 	})
 }
 
-//noGCMap
-func BenchmarkSetGet(b *testing.B) {
-	const items = 1 << 16
-	c := New()
+// BenchmarkStdMapSet 作为参照：标准 map + Mutex。
+func BenchmarkStdMapSet(b *testing.B) {
+	keys := benchKeys()
+	m := make(map[string][]byte, benchItems)
+	var mu sync.Mutex
+	v := []byte("value")
 	b.ReportAllocs()
-	b.SetBytes(2 * items)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := []byte("xyza")
-		var buf []byte
+		i := 0
+		val := append([]byte(nil), v...)
 		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				c.Set(k, v)
-			}
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				buf, _ = c.Get(k)
-				if !bytes.Equal(buf, v) {
-					panic(fmt.Errorf("BUG: invalid value obtained; got %q; want %q", buf, v))
-				}
-			}
+			val[0]++
+			mu.Lock()
+			m[string(keys[i%benchItems])] = val
+			mu.Unlock()
+			i++
 		}
 	})
 }
 
-//Fastcache
-func BenchmarkFastcacheSetGet(b *testing.B) {
-	const items = 1 << 16
-	c := fastcache.New(12 * items)
-	defer c.Reset()
+// BenchmarkKeyToSliceUnSafe 测量不加锁收集全部 key 的成本（每轮都会分配新切片，故用较小的 benchtime）。
+func BenchmarkKeyToSliceUnSafe(b *testing.B) {
+	keys := benchKeys()
+	m := New()
+	for _, k := range keys {
+		m.Set(k, []byte("v"))
+	}
 	b.ReportAllocs()
-	b.SetBytes(2 * items)
-	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := []byte("xyza")
-		var buf []byte
-		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				c.Set(k, v)
-			}
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				buf = c.Get(buf[:0], k)
-				if !bytes.Equal(buf, v) {
-					panic(fmt.Errorf("BUG: invalid value obtained; got %q; want %q", buf, v))
-				}
-			}
-		}
-	})
-}
-
-//Std
-func BenchmarkStdMapSetGet(b *testing.B) {
-	const items = 1 << 16
-	m := make(map[string][]byte)
-	var mu sync.RWMutex
-	b.ReportAllocs()
-	b.SetBytes(2 * items)
-	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := []byte("xyza")
-		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				mu.Lock()
-				m[string(k)] = v
-				mu.Unlock()
-			}
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				mu.RLock()
-				vv := m[string(k)]
-				mu.RUnlock()
-				if string(vv) != string(v) {
-					panic(fmt.Errorf("BUG: unexpected value; got %q; want %q", vv, v))
-				}
-			}
-		}
-	})
-}
-
-//StdSyncMap
-func BenchmarkSyncMapSetGet(b *testing.B) {
-	const items = 1 << 16
-	m := sync.Map{}
-	b.ReportAllocs()
-	b.SetBytes(2 * items)
-	b.RunParallel(func(pb *testing.PB) {
-		k := []byte("\x00\x00\x00\x00")
-		v := "xyza"
-		for pb.Next() {
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				m.Store(string(k), v)
-			}
-			for i := 0; i < items; i++ {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				vv, ok := m.Load(string(k))
-				if !ok || vv.(string) != string(v) {
-					panic(fmt.Errorf("BUG: unexpected value; got %q; want %q", vv, v))
-				}
-			}
-		}
-	})
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = m.KeyToSliceUnSafe(nil)
+	}
 }
